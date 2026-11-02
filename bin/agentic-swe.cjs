@@ -1,0 +1,130 @@
+#!/usr/bin/env node
+/**
+ * Minimal CLI for npm-installed pack: print absolute plugin root or version.
+ * Usage:
+ *   agentic-swe path | pack-path   → stdout: directory containing CLAUDE.md, commands/, …
+ *   agentic-swe version            → stdout: semver from package.json
+ *   agentic-swe receipt [args]     → render receipt for a worklog (delegates to scripts/render-receipt.cjs)
+ */
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const root = path.resolve(__dirname, '..');
+const pkgPath = path.join(root, 'package.json');
+const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+
+const argv = process.argv.slice(2);
+const cmd = argv[0] || 'help';
+
+function usage() {
+  process.stderr.write(`agentic-swe — ${pkg.description || 'agentic-swe pack'}\n\n`);
+  process.stderr.write(`Usage:\n`);
+  process.stderr.write(`  agentic-swe path | pack-path   Print absolute pack root (for --plugin-dir / Cursor AGENTIC_SWE_PACK_ROOT)\n`);
+  process.stderr.write(`  agentic-swe version             Print ${pkg.name}@${pkg.version}\n`);
+  process.stderr.write(`  agentic-swe setup [args]        Configure one or more supported coding hosts\n`);
+  process.stderr.write(`  agentic-swe doctor [args]       Check the tool, host detection, and project setup\n`);
+  process.stderr.write(`  agentic-swe work [args]         Work engine (init, status, transition, descent, record-cost)\n`);
+  process.stderr.write(`  agentic-swe receipt [args]      Render a receipt for a worklog (passes args to scripts/render-receipt.cjs)\n`);
+  process.stderr.write(`  agentic-swe goal [args]         Run the goal-loop engine (passes args to scripts/goal-engine.cjs)\n`);
+  process.stderr.write(`  agentic-swe dispatch [args]     Plan, start, and resume a goal's child work items in dependency order\n`);
+  process.stderr.write(`  agentic-swe github [args]       Read-only GitHub connector (issues, PRs, reviews, checks, approval verify)\n`);
+  process.stderr.write(`  agentic-swe founder [args]      Human-only control: status (goals, approvals, findings, cost, integrity) and approve\n`);
+  process.stderr.write(`  agentic-swe context-budget [args]  Estimate always-loaded context tokens for the install profile\n`);
+  process.stderr.write(`  agentic-swe host-parity [args]     Report stable / partial / instruction-only status per supported host\n`);
+  process.stderr.write(`  agentic-swe scan [args]          Scan a destination for agent-surface findings\n`);
+  process.stderr.write(`  agentic-swe list-installed [args]  Show owned, drifted, and preserved files\n`);
+  process.stderr.write(`  agentic-swe repair [args]        Restore drifted owned files and adopt exact hash matches\n`);
+  process.stderr.write(`  agentic-swe update [args]        Replace owned files from the current pack\n`);
+  process.stderr.write(`  agentic-swe uninstall [args]     Remove owned files whose current hash matches the manifest\n`);
+  process.stderr.write(`  agentic-swe help                Show this message\n`);
+}
+
+if (cmd === 'context-budget') {
+  const script = path.join(root, 'scripts', 'context-budget.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'setup') {
+  const script = path.join(root, 'scripts', 'setup.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'doctor') {
+  const script = path.join(root, 'scripts', 'doctor.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'host-parity') {
+  const script = path.join(root, 'scripts', 'host-parity.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'work') {
+  const script = path.join(root, 'scripts', 'work-engine.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'receipt') {
+  const script = path.join(root, 'scripts', 'render-receipt.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'goal') {
+  const script = path.join(root, 'scripts', 'goal-engine.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'github') {
+  const script = path.join(root, 'scripts', 'github.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'founder') {
+  const script = path.join(root, 'scripts', 'founder.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'dispatch') {
+  const script = path.join(root, 'scripts', 'dispatch.cjs');
+  const res = spawnSync(process.execPath, [script, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+const controlCommands = new Set(['scan', 'list-installed', 'repair', 'update', 'uninstall']);
+if (controlCommands.has(cmd)) {
+  const script = path.join(root, 'scripts', 'control-plane.cjs');
+  const res = spawnSync(process.execPath, [script, cmd, ...argv.slice(1)], { stdio: 'inherit' });
+  process.exit(res.status == null ? 1 : res.status);
+}
+
+if (cmd === 'path' || cmd === 'pack-path') {
+  if (!fs.existsSync(path.join(root, 'CLAUDE.md'))) {
+    process.stderr.write(`error: pack root missing CLAUDE.md: ${root}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`${root}\n`);
+  process.exit(0);
+}
+
+if (cmd === 'version' || cmd === '-v' || cmd === '--version') {
+  process.stdout.write(`${pkg.version}\n`);
+  process.exit(0);
+}
+
+if (cmd === 'help' || cmd === '-h' || cmd === '--help') {
+  usage();
+  process.exit(0);
+}
+
+usage();
+process.exit(1);
