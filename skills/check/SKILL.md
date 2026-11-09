@@ -1,0 +1,84 @@
+---
+name: check
+description: "Enforce budget, transition, and artifact checks (permission-gated)."
+metadata:
+  tier: "L2"
+  eval_status: "evaluated"
+  eval_ref: "bench/corpus/oracle-verify-sanity"
+  version: "1.0.0"
+  provenance: "generate-skills"
+  kind: "command"
+  source: "commands/check.md"
+---
+
+# /check
+
+Unified enforcement skill for budget, transition, and artifact validation. Permission-gated — the user sees exactly what is being checked.
+
+## Work engine (CI / automation)
+
+The same **budget**, **transition**, and **destination artifact** rules are implemented in code at **`${CLAUDE_PLUGIN_ROOT}/scripts/lib/work-engine/`** and exposed as:
+
+- **`agentic-swe work`** — the work engine. Same process as **`node ${CLAUDE_PLUGIN_ROOT}/bin/agentic-swe.cjs work`**. Subcommands include `init`, `status`, `apply-budget-profile`, `validate`, `budget`, `plan-transition`, `transition`, `record-cost`, `descent-try`, `descent-capture`.
+- From a checkout of this pack: **`npm run work-engine -- …`** still reaches the same script. Prefer **`agentic-swe work`**.
+- **`validation` → `pr-creation`** runs **`pipeline.acceptance_command`** when it is set and refuses the transition when that command exits non-zero. The log is **`verify-result.json`**. New work items start on the **lean** track unless **`--budget-profile`** says otherwise.
+
+Use **`plan-transition`** to validate a proposed edge without writing; use **`transition`** only when artifacts and budgets already satisfy policy (atomic **`state.json`** write, optional **`--dry-run`**). **`budget.cost_used`** is updated from **real token usage** in the Claude Code session transcript: the **`Stop`** hook runs **`hook-record-cost.cjs`** (see root **`hooks/hooks.json`**), which parses new lines from **`transcript_path`** and adds estimated USD (see **`scripts/lib/work-engine/pricing.cjs`**; override with **`AGENTIC_SWE_PRICING_JSON`**). For CI or ad-hoc sync: **`npm run work-engine -- record-cost --transcript-path /path/to.jsonl --cwd /your/repo`**. Set **`AGENTIC_SWE_WORK_DIR`** to a specific **`.worklogs/<id>`** if multiple active work items exist. Iteration **`budget.budget_remaining`** is decremented by **`transition`** by default (**`--no-decrement-budget`** to skip).
+
+**Configurable budgets (tracks + caps + subagents):** Defaults ship in **`config/budget-thresholds.default.json`** (per-track **`iteration_budget`** / **`cost_budget_usd`**, **`counter_caps`**, **`subagents`** thresholds). Merge overrides from **`AGENTIC_SWE_BUDGET_THRESHOLDS`** (path to a JSON file) and from **`<repo>/.agentic-swe/budget-thresholds.json`**. **`init … --budget-profile lean|standard|rigorous`** applies that track’s ceilings and writes **`budget.policy`**; **`apply-budget-profile --work-dir … --track …`** updates an existing work item. When leaving **`lean-track-check`**, **`transition … --set-pipeline-track …`** applies the chosen track’s ceilings from the same merged config, and the exit edge is checked against that track (so `--set-pipeline-track rigorous --to design` works from a work item initialised as `lean`). On any other state the flag is rejected. A lower track is accepted only when **`pipeline.track_waiver`** is **`{ actor: "user:…", reason, at }`**, written by **`work waive-track --reason …`** (human terminal). That waiver does not reload budget ceilings.
+
+## Prompt
+
+**Dispatch on `$ARGUMENTS`:**
+
+- `/check budget` — verify budget is not exhausted
+- `/check transition <from> <to>` — validate a proposed state transition
+- `/check artifacts <state>` — verify required artifacts exist for a destination state
+
+---
+
+### Budget Check
+
+Read the active `.worklogs/<id>/state.json` and check:
+
+1. **Iteration budget**: Is `budget.budget_remaining > 0`?
+2. **Cost budget**: Is `budget.cost_used < budget.cost_budget_usd`?
+3. **Loop counters** (defaults match **`config/budget-thresholds.default.json`**; **`work-engine budget`** uses merged config when **`--work-dir`** resolves under **`.worklogs/`**):
+   - `counters.lean_iter` must be ≤ configured cap (default 2)
+   - `counters.design_iter` must be ≤ 3 or ≤ high-risk cap if `risk.score` meets **`design_iter_high_risk_min_score`** (defaults 3 / 4 / score ≥ 4)
+   - `counters.code_iter`, `merge_iter`, `approval_iter`, `self_review_iter`, `test_adequacy_iter` — each ≤ its cap in config
+   - `work transition` increments the counter for a rejection edge: `self-review → implementation` (`self_review_iter`); `code-review → implementation` and `validation → implementation` (`code_iter`, or `lean_iter` when `pipeline.track` is `lean`); `design-review → design` and `verification → design` (`design_iter`). `plan-transition` returns `BUDGET_STOP` when that edge would pass the cap. `approval_iter` is incremented only by `work approve` when changes are requested.
+   - `counters.panel_runs` and `counters.subagent_spawns` change only through `work record-spawn --role <id>` (`panel` or `panel:…` counts as a panel run; anything else counts as a subagent spawn). In in-host mode nothing records a spawn automatically, so the cap applies only to spawns the session records. Defaults are 8 and 60.
+
+**Output:** iteration budget `<remaining>/<total>`, cost budget `$<used>/$<total>`, loop counters with effective ceilings, verdict: `PROCEED` or `STOP`.
+
+If any budget or counter is exhausted, output a clear **STOP** directive naming the exhausted resource.
+
+---
+
+### Transition Check
+
+Given `from_state` and `to_state`, check against the state machine in `CLAUDE.md`:
+
+1. Is the transition `from_state → to_state` in the allowed transition set?
+2. What artifacts are required for the destination state?
+3. Are there any loop budget constraints that apply?
+4. For `code-review → permissions-check`: does `state.reviews` hold, for this code-review round, at least one review, a result for every recorded spawn, no failed or non-approved latest run, and no unresolved `high`/`critical` finding? (`work plan-transition` reports `REVIEW_MISSING`, `REVIEW_FAILED`, `REVIEW_REJECTED` or `REVIEW_BLOCKING_FINDINGS`.)
+
+**Output:** transition `<from> → <to>`, allowed: `true`/`false`, required artifacts for destination, applicable budget constraints, verdict: `VALID` or `INVALID`.
+
+If INVALID, explain which rule it violates.
+
+---
+
+### Artifact Check
+
+Given `destination_state` and `work_dir` (`.worklogs/<id>/`), check against the required artifacts table in `CLAUDE.md`:
+
+1. What artifacts are required for `destination_state`?
+2. For each: does the file exist? Is it non-empty?
+3. Update `state.json.artifacts` to reflect actual filenames found.
+
+**Output:** destination state, required artifacts list, per-artifact status (`EXISTS`/`MISSING`/`EMPTY`), verdict: `COMPLETE` or `INCOMPLETE`.
+
+If any required artifact is MISSING or EMPTY, list the missing items. The Hypervisor must not complete the transition until the verdict is COMPLETE.

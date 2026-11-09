@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentic-swe.github.io/schemas/agentic-swe-policy.schema.json",
+  "title": "Agentic SWE Policy",
+  "description": "Schema for organization or repository-level policy files that merge with pack defaults.",
+  "type": "object",
+  "properties": {
+    "version": { "type": "string", "default": "1.0" },
+    "track_rules": {
+      "type": "array",
+      "description": "Minimum track by changed path, checked by the work engine when leaving lean-track-check and on any --set-pipeline-track. A lower track is rejected (TRACK_POLICY).",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "minimum_track"],
+        "properties": {
+          "pattern": { "type": "string", "description": "Glob matched against repo-relative changed paths (e.g. 'src/auth/**'). A pattern without '/' matches the file name at any depth (e.g. '*.sql')." },
+          "minimum_track": { "type": "string", "enum": ["lean", "standard", "rigorous"] },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "mandatory_subagents": {
+      "type": "array",
+      "description": "Subagents that must have a spawn record (work record-spawn --role) when a changed path matches. Checked when leaving `phase`, and for every rule before validation -> pr-creation (MANDATORY_SUBAGENT_MISSING).",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "subagent"],
+        "properties": {
+          "pattern": { "type": "string", "description": "Glob matched like track_rules.pattern." },
+          "subagent": { "type": "string", "description": "Subagent path under agents/subagents/. Matched to a spawn record role by file name without .md (e.g. 'quality-security/security-auditor.md' = role 'security-auditor')." },
+          "phase": { "type": "string", "description": "State whose exit requires a spawn recorded in that state. Omit to require it only before pr-creation." }
+        }
+      }
+    },
+    "banned_tools": {
+      "type": "array",
+      "description": "Tools or shell command prefixes denied at runtime by the PreToolUse hook.",
+      "items": {
+        "type": "object",
+        "required": ["tool", "reason"],
+        "properties": {
+          "id": { "type": "string", "description": "Stable rule name reported in deny messages and audit lines instead of the array index." },
+          "tool": { "type": "string", "description": "Tool-name glob (e.g. 'WebFetch', 'mcp__github__*'), or a shell command prefix when it contains whitespace (e.g. 'git push --force')." },
+          "context": { "type": "string", "description": "When this is a work-item state name the rule applies only in that state; otherwise descriptive and the rule always applies." },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "banned_commands": {
+      "type": "array",
+      "description": "Shell commands denied at runtime, matched as JavaScript regular expressions.",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "reason"],
+        "properties": {
+          "id": { "type": "string", "description": "Stable rule name reported in deny messages and audit lines instead of the array index." },
+          "pattern": { "type": "string", "description": "JavaScript RegExp source tested against the full shell command." },
+          "reason": { "type": "string" },
+          "states": { "type": "array", "items": { "type": "string" }, "description": "Limit the rule to these work-item states. Omit to apply always." }
+        }
+      }
+    },
+    "protected_paths": {
+      "type": "array",
+      "description": "Files that edit tools (Write, Edit, apply_patch, ...) may not modify, matched as globs against the target path.",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "reason"],
+        "properties": {
+          "id": { "type": "string" },
+          "pattern": { "type": "string", "description": "Glob matched against the target path with leading '/', drive letter or './' removed (e.g. '**/.worklogs/**/journal.jsonl')." },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "phase_tool_allowlist": {
+      "type": "object",
+      "description": "Per-state tool-name globs. In a listed state any other tool is denied; unlisted states are unrestricted. When repo and org policies both list a state, only tools in both lists are allowed.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "required_artifacts": {
+      "type": "object",
+      "description": "Extra files required before leaving a state, added to the work engine's built-in artifact check. An entry may list alternatives as 'a.md|b.md'; names must stay inside the work dir.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "budget_overrides": {
+      "type": "object",
+      "description": "Replace every track's ceilings from config/budget-thresholds; applied when a work item is initialised and when a track is set leaving lean-track-check.",
+      "properties": {
+        "max_cost_usd": { "type": "number", "description": "budget.cost_budget_usd for every track." },
+        "max_iterations": { "type": "integer", "description": "budget.iteration_budget for every track." },
+        "max_doubt_cycles": { "type": "integer", "description": "Not enforced: no doubt-cycle counter exists. Accepted for compatibility and ignored." }
+      }
+    }
+  },
+  "additionalProperties": false
+}
