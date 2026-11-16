@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "agentic-swe-memory": {
+      "command": "node",
+      "args": [
+        ".agentic-swe/scripts/mcp-memory-server.cjs"
+      ]
+    }
+  }
+}

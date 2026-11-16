@@ -1,0 +1,294 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { extractFrontmatter } = require('../catalog/parse-frontmatter.cjs');
+const { parseMetadataMap } = require('./golden-eval.cjs');
+const { isShadowTrusted } = require('./skill-integrity.cjs');
+
+const SKILL_NAME_RE = /^[a-z][a-z0-9-]{0,63}$/;
+
+/**
+ * @param {string} skillsRoot
+ * @param {'pack'|'project'} origin
+ */
+function readSkillsDir(skillsRoot, origin) {
+  if (!fs.existsSync(skillsRoot)) return [];
+  const out = [];
+  for (const d of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    // AE-032b / PD-44: staged candidates live under skills/candidates/ and are never
+    // part of the project skill catalog (autonomous selection stays false until publish).
+    if (origin === 'project' && d.name === 'candidates') continue;
+    const skillPath = path.join(skillsRoot, d.name, 'SKILL.md');
+    if (!fs.existsSync(skillPath)) continue;
+    const raw = fs.readFileSync(skillPath, 'utf8');
+    const ex = extractFrontmatter(raw);
+    if (!ex) continue;
+    const meta = parseMetadataMap(ex.block);
+    const descMatch = ex.block.match(/^description:\s*"(.*)"/m);
+    out.push({
+      name: d.name,
+      path: skillPath,
+      description: descMatch ? descMatch[1] : '',
+      kind: meta.kind || 'unknown',
+      eval_status: meta.eval_status || 'unevaluated',
+      eval_ref: meta.eval_ref || '',
+      tier: meta.tier || 'L2',
+      origin,
+    });
+  }
+  return out;
+}
+
+/**
+ * List pack skills plus optional project-local `.agentic-swe/skills`.
+ * Same-named project skills still appear for listing/manual inspection, but are
+ * tagged with shadow metadata (SEC-006). Autonomous callers must use resolveSkill.
+ * @param {string} pluginRoot
+ * @param {string} [projectRoot]
+ */
+function listSkills(pluginRoot, projectRoot) {
+  const pack = readSkillsDir(path.join(path.resolve(pluginRoot), 'skills'), 'pack');
+  if (!projectRoot) {
+    return pack
+      .map((s) => ({ ...s, shadow: null }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  const project = readSkillsDir(path.join(path.resolve(projectRoot), '.agentic-swe', 'skills'), 'project');
+  const packNames = new Set(pack.map((s) => s.name));
+  const byName = new Map(pack.map((s) => [s.name, { ...s, shadow: null }]));
+  for (const s of project) {
+    if (packNames.has(s.name)) {
+      const trusted = isShadowTrusted(projectRoot, s.name);
+      byName.set(s.name, {
+        ...s,
+        shadow: trusted ? 'explicit' : 'implicit',
+        shadows_pack: true,
+      });
+    } else {
+      byName.set(s.name, { ...s, shadow: null });
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Resolve a skill for autonomous or manual use. Rejects implicit pack shadows.
+ * @param {{ pluginRoot: string, projectRoot?: string, skillName: string, autonomous?: boolean }} opts
+ * @returns {{
+ *   ok: true, skill: object, shadow: null|'explicit'|'implicit'
+ * } | {
+ *   ok: false, code: string, shadow?: string
+ * }}
+ */
+function resolveSkill(opts) {
+  const pluginRoot = path.resolve(opts.pluginRoot);
+  const projectRoot = opts.projectRoot ? path.resolve(opts.projectRoot) : null;
+  const skillName = String(opts.skillName || '').trim();
+  const autonomous = opts.autonomous !== false;
+  if (!skillName) return { ok: false, code: 'NOT_FOUND' };
+
+  const packPath = path.join(pluginRoot, 'skills', skillName, 'SKILL.md');
+  const projectPath = projectRoot
+    ? path.join(projectRoot, '.agentic-swe', 'skills', skillName, 'SKILL.md')
+    : null;
+  const packExists = fs.existsSync(packPath);
+  const projectExists = !!(projectPath && fs.existsSync(projectPath));
+
+  function projectRow(shadow) {
+    const row = readSkillsDir(path.join(projectRoot, '.agentic-swe', 'skills'), 'project').find(
+      (s) => s.name === skillName
+    );
+    return {
+      ok: true,
+      skill: {
+        ...(row || { name: skillName, path: projectPath, origin: 'project' }),
+        shadow,
+        shadows_pack: shadow != null,
+      },
+      shadow,
+    };
+  }
+
+  if (projectExists && packExists) {
+    const trusted = isShadowTrusted(projectRoot, skillName);
+    if (autonomous && !trusted) {
+      return { ok: false, code: 'SHADOW_UNTRUSTED', shadow: 'implicit' };
+    }
+    return projectRow(trusted ? 'explicit' : 'implicit');
+  }
+
+  if (projectExists) return projectRow(null);
+
+  if (packExists) {
+    const row = readSkillsDir(path.join(pluginRoot, 'skills'), 'pack').find((s) => s.name === skillName);
+    return {
+      ok: true,
+      skill: { ...(row || { name: skillName, path: packPath, origin: 'pack' }), shadow: null },
+      shadow: null,
+    };
+  }
+
+  return { ok: false, code: 'NOT_FOUND' };
+}
+
+function projectSkillPath(projectRoot, skillName) {
+  return path.join(path.resolve(projectRoot), '.agentic-swe', 'skills', skillName, 'SKILL.md');
+}
+
+/**
+ * Scaffold an unevaluated project-local skill from a mined procedure ritual.
+ * @param {{ projectRoot: string, skillName: string, verifyCommand: string, source?: string }} opts
+ */
+function scaffoldProjectSkillFromRitual(opts) {
+  const projectRoot = path.resolve(opts.projectRoot);
+  const skillName = String(opts.skillName || '').toLowerCase();
+  const verifyCommand = String(opts.verifyCommand || '').trim();
+  if (!SKILL_NAME_RE.test(skillName)) {
+    return { ok: false, error: `invalid skill name: ${skillName}` };
+  }
+  if (!verifyCommand) {
+    return { ok: false, error: 'verifyCommand required' };
+  }
+
+  const skillPath = projectSkillPath(projectRoot, skillName);
+  if (fs.existsSync(skillPath)) {
+    return { ok: true, skipped: true, skill: skillName, path: skillPath };
+  }
+
+  const source = opts.source || 'procedure-ritual';
+  const desc = `Team ritual skill mined from ${source} (${verifyCommand.slice(0, 80)}).`;
+  const meta = {
+    tier: 'L2',
+    eval_status: 'unevaluated',
+    eval_ref: '',
+    version: '1.0.0',
+    provenance: 'ritual-scaffold',
+    kind: 'command',
+    ritual_source: source,
+  };
+  const metaLines = Object.entries(meta)
+    .map(([k, v]) => `  ${k}: "${String(v).replace(/"/g, '\\"')}"`)
+    .join('\n');
+  const fm = `---
+name: ${skillName}
+description: "${desc.replace(/"/g, '\\"')}"
+metadata:
+${metaLines}
+---
+
+# ${skillName}
+
+Project-local skill scaffolded from an evaluated procedure \`npm run\` ritual.
+
+## Verify ritual
+
+\`\`\`bash
+${verifyCommand}
+\`\`\`
+
+Add a golden eval task under \`bench/corpus/\` and map \`eval_ref\` before autonomous use.
+`;
+
+  fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+  fs.writeFileSync(skillPath, fm);
+  return { ok: true, created: true, skill: skillName, path: skillPath };
+}
+
+/**
+ * Scaffold project skills for procedure rituals with no matching pack/project skill.
+ * @param {{ projectRoot: string, pluginRoot: string, dryRun?: boolean }} opts
+ */
+function scaffoldMissingRitualSkills(opts) {
+  const { collectProcedureRitualSkills, resolveProcedureStoreRoot } = require('./procedure-ritual-skills.cjs');
+  const { loadStore } = require('../descent/promotion.cjs');
+
+  const projectRoot = path.resolve(opts.projectRoot);
+  const pluginRoot = path.resolve(opts.pluginRoot);
+  const storeRoot = resolveProcedureStoreRoot({ projectRoot, pluginRoot });
+  const rituals = collectProcedureRitualSkills(storeRoot);
+  const known = new Set(listSkills(pluginRoot, projectRoot).map((s) => s.name));
+  const data = loadStore(storeRoot);
+  const { parseRitualPattern } = require('./procedure-ritual-skills.cjs');
+
+  const results = [];
+  for (const r of rituals) {
+    if (known.has(r.skill)) continue;
+    if (r.evaluated < 1) {
+      results.push({ skill: r.skill, ok: false, skipped: true, reason: 'no evaluated procedure ritual' });
+      continue;
+    }
+    const proc = (data.procedures || []).find((p) => {
+      if (p.eval_status !== 'evaluated') return false;
+      const cmd = p.procedure?.verify?.[0]?.command || '';
+      const pattern = parseRitualPattern(cmd);
+      return pattern && pattern.skill === r.skill;
+    });
+    const verifyCommand =
+      proc?.procedure?.verify?.[0]?.command ||
+      (Array.isArray(r.commands) && r.commands[0]) ||
+      `npm run ${r.skill}`;
+    const source = proc?.procedure?._meta?.source || 'procedure-ritual';
+    if (opts.dryRun) {
+      results.push({ skill: r.skill, ok: true, dry_run: true, verify_command: verifyCommand });
+      continue;
+    }
+    const created = scaffoldProjectSkillFromRitual({
+      projectRoot,
+      skillName: r.skill,
+      verifyCommand,
+      source,
+    });
+    results.push({ ...created, verify_command: verifyCommand });
+  }
+
+  const created = results.filter((r) => r.created).length;
+  if (!opts.dryRun && created > 0) {
+    writeGoldenEvalSuggestions(projectRoot, results);
+  }
+  return { ok: true, created, total: results.length, results };
+}
+
+/**
+ * Suggest golden eval mappings for newly scaffolded ritual skills.
+ * @param {string} projectRoot
+ * @param {Array<{ skill: string, created?: boolean, verify_command?: string }>} entries
+ */
+function writeGoldenEvalSuggestions(projectRoot, entries) {
+  const suggestions = {};
+  for (const e of entries) {
+    if (!e.skill || !e.created) continue;
+    const cmd = String(e.verify_command || '');
+    if (/^node --test test\//.test(cmd)) {
+      suggestions[e.skill] = {
+        pack_eval_ref: 'bench/corpus/oracle-verify-sanity',
+        verify_command: cmd,
+        note: 'Copy into .agentic-swe/skill-golden-eval.json then run skill-eval promote-rituals',
+      };
+    } else if (/^npm run [a-z][a-z0-9-]*$/.test(cmd)) {
+      suggestions[e.skill] = {
+        verify_command: cmd,
+        note: 'Add a project bench/corpus task and map eval_ref in skill-golden-eval.json',
+      };
+    }
+  }
+  if (!Object.keys(suggestions).length) return null;
+  const agenticDir = path.join(projectRoot, '.agentic-swe');
+  fs.mkdirSync(agenticDir, { recursive: true });
+  const outPath = path.join(agenticDir, 'skill-golden-eval.suggestions.json');
+  fs.writeFileSync(outPath, JSON.stringify({ version: 1, skills: suggestions }, null, 2));
+  return outPath;
+}
+
+module.exports = {
+  SKILL_NAME_RE,
+  readSkillsDir,
+  listSkills,
+  resolveSkill,
+  projectSkillPath,
+  scaffoldProjectSkillFromRitual,
+  scaffoldMissingRitualSkills,
+  writeGoldenEvalSuggestions,
+};

@@ -1,0 +1,34 @@
+{
+  "agentic-swe-memory-start": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node .agentic-swe/scripts/host-lifecycle.cjs --host antigravity --event start",
+        "timeout": 120
+      }
+    ]
+  },
+  "agentic-swe-policy": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .agentic-swe/scripts/hook-pre-tool-policy.cjs --host antigravity",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "agentic-swe-memory-stop": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node .agentic-swe/scripts/host-lifecycle.cjs --host antigravity --event stop",
+        "timeout": 120
+      }
+    ]
+  }
+}

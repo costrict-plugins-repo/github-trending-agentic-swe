@@ -1,0 +1,43 @@
+{
+  "description": "Automatic Agentic SWE memory lifecycle for a repository",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agentic-swe/scripts/host-lifecycle.cjs\" --host codex --event start",
+            "timeout": 120,
+            "statusMessage": "Refreshing Agentic SWE memory"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agentic-swe/scripts/hook-pre-tool-policy.cjs\" --host codex",
+            "timeout": 10,
+            "statusMessage": "Checking Agentic SWE policy"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.agentic-swe/scripts/host-lifecycle.cjs\" --host codex --event stop",
+            "timeout": 120,
+            "statusMessage": "Capturing Agentic SWE memory"
+          }
+        ]
+      }
+    ]
+  }
+}
